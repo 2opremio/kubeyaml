@@ -16,11 +16,13 @@ def parse_args():
     subparsers = p.add_subparsers()
 
     image = subparsers.add_parser('image', help='update an image ref')
+    image.add_argument('--api-version', required=False)
     image.add_argument('--namespace', required=True)
     image.add_argument('--kind', required=True)
     image.add_argument('--name', required=True)
     image.add_argument('--container', required=True)
     image.add_argument('--image', required=True)
+    image.add_argument('--add-if-not-found', required=False, action='store_true', default=False)
     image.set_defaults(func=update_image)
 
     def note(s):
@@ -28,13 +30,18 @@ def parse_args():
         return k, v
 
     annotation = subparsers.add_parser('annotate', help='update annotations')
+    annotation.add_argument('--api-version', required=False)
     annotation.add_argument('--namespace', required=True)
     annotation.add_argument('--kind', required=True)
     annotation.add_argument('--name', required=True)
+    annotation.add_argument('--add-if-not-found', required=False, action='store_true', default=False)
     annotation.add_argument('notes', nargs='+', type=note)
     annotation.set_defaults(func=update_annotations)
 
-    return p.parse_args()
+    args = p.parse_args()
+    if args.add_if_not_found and args.api_version is None:
+        p.error("--api-version must be set when setting --add-if-not-found")
+    return args
 
 def yaml():
     y = YAML()
@@ -78,7 +85,14 @@ def update_image(args, docs):
                     break
         yield doc
     if not found:
-        raise NotFound()
+        if args.add_if_not_found != None:
+            docs += generate_doc_with_image(args)
+        else:
+            raise NotFound()
+
+def generate_doc_with_image(args):
+    doc = generate_doc(args)
+    
 
 def update_annotations(spec, docs):
     def ensure(d, *keys):
@@ -110,7 +124,13 @@ def update_annotations(spec, docs):
                     break
         yield doc
     if not found:
-        raise NotFound()
+        if spec.add_if_not_found:
+            docs += generate_doc_with_annotations(spec)
+        else:
+            raise NotFound()
+
+def generate_doc_with_annotations(spec):
+    pass
 
 def manifests(doc):
     if doc['kind'] == 'List':
