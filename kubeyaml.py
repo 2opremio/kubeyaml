@@ -1,6 +1,8 @@
 import sys
 import argparse
 import functools
+import copy
+import deepdiff
 import collections
 from ruamel.yaml import YAML
 
@@ -21,6 +23,8 @@ def parse_args():
     image.add_argument('--name', required=True)
     image.add_argument('--container', required=True)
     image.add_argument('--image', required=True)
+    image.add_argument('--patch-mode', required=False, action='store_true', default=False,
+                       help='Generate strategic merge patch instead of editing the input')
     image.set_defaults(func=update_image)
 
     def note(s):
@@ -31,6 +35,8 @@ def parse_args():
     annotation.add_argument('--namespace', required=True)
     annotation.add_argument('--kind', required=True)
     annotation.add_argument('--name', required=True)
+    annotation.add_argument('--patch-mode', required=False, action='store_true', default=False,
+                            help='Generate strategic merge patch instead of editing the input')
     annotation.add_argument('notes', nargs='+', type=note)
     annotation.set_defaults(func=update_annotations)
 
@@ -65,6 +71,56 @@ def apply_to_yaml(fn, infile, outfile):
     docs = y.load_all(infile)
     y.dump_all(fn(docs), outfile)
 
+
+def get_smp(doc1, doc2):
+    smp = None
+    diff = deepdiff.DeepDiff(t1=doc1, t2=doc2, verbose_level=1, view='tree')
+    changes = []
+    for k in ['values_changed', 'dictionary_item_added', 'dictionary_item_removed']:
+        if k in diff:
+            changes += diff[k]
+    if len(changes) > 0:
+        smp = {}
+    for c in changes:
+        diff_node, smp_node = c.all_up, smp
+        while True:
+            if isinstance(diff_node.t2, collections.OrderedDict):
+                if 'kind' in diff_node.t2:
+                    smp_node['kind'] = diff_node.t2['kind']
+                    if 'metadata' in diff_node.t2:
+                        metadata = {}
+                        if 'name' in diff_node.t2['metadata']:
+                            metadata['name'] = diff_node.t2['metadata']['name'] 
+                        if 'namespace' in diff_node.t2['metadata']:
+                            metadata['namespace'] = diff_node.t2['metadata']['namespace']
+                        if len(metadata) > 0:
+                            smp_node['metadata'] = metadata
+
+            if diff_node.down is None:
+                break
+
+            if isinstance(diff_node.down.t2, collections.OrderedDict):
+                if diff_node.t2_child_rel.param not in smp_node:
+                    # Initialize it if it wasn't
+                    smp_node[diff_node.t2_child_rel.param] = {}
+                smp_node = smp_node[diff_node.t2_child_rel.param]
+            elif isinstance(diff_node.down.t2, list):
+                if diff_node.t2_child_rel.param not in smp_node:
+                    # Initialize it if it wasn't
+                    smp_node[diff_node.t2_child_rel.param] = [None]
+                smp_node = smp_node[diff_node.t2_child_rel.param]
+            else:
+                if diff_node.t2_child_rel is None:
+                    # deletion
+                    smp_node[diff_node.t1_child_rel.param] = None
+                else:
+                    smp_node[diff_node.t2_child_rel.param] = diff_node.down.t2
+
+            diff_node = diff_node.down
+
+    return smp
+
+
 def update_image(args, docs):
     """Update the manifest specified by args, in the stream of docs"""
     found = False
@@ -73,10 +129,16 @@ def update_image(args, docs):
             for m in manifests(doc):
                 c = find_container(args, m)
                 if c != None:
+                    if args.patch_mode:
+                        original_doc = copy.deepcopy(doc)
                     set_container_image(m, c, args.image)
                     found = True
+                    if args.patch_mode:
+                        patch_doc = get_smp(original_doc, doc)
+                        yield patch_doc
                     break
-        yield doc
+        if not args.patch_mode:
+            yield doc
     if not found:
         raise NotFound()
 
@@ -95,6 +157,8 @@ def update_annotations(spec, docs):
         if not found:
             for m in manifests(doc):
                 if match_manifest(spec, m):
+                    if spec.patch_mode:
+                        original_doc = copy.deepcopy(doc)
                     notes = ensure(m, 'metadata', 'annotations')
                     for k, v in spec.notes:
                         if v == '':
@@ -107,8 +171,12 @@ def update_annotations(spec, docs):
                     if len(notes) == 0:
                         del m['metadata']['annotations']
                     found = True
+                    if spec.patch_mode:                 
+                        patch_doc = get_smp(original_doc, doc)
+                        yield patch_doc
                     break
-        yield doc
+        if not spec.patch_mode:
+            yield doc
     if not found:
         raise NotFound()
 
