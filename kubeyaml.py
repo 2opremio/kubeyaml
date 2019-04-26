@@ -228,14 +228,14 @@ def set_container_image(manifest, container, image):
         container['image'] = image
 
 def mappings(values):
-    return ((k, values[k]) for k in values if isinstance(values[k], collections.Mapping))
+    return ((k, values[k]) for k in values if isinstance(values[k], collections.abc.Mapping))
 
 # There are different ways of interpreting FluxHelmRelease values as
 # images, and we have to sniff to see which to use.
 def fluxhelmrelease_containers(manifest):
     def get_image(values):
         image = values['image']
-        if isinstance(image, collections.Mapping) and 'repository' in image and 'tag' in image:
+        if isinstance(image, collections.abc.Mapping) and 'repository' in image and 'tag' in image:
             values = image
             image = image['repository']
         if 'tag' in values and values['tag'] != '':
@@ -265,7 +265,7 @@ def set_fluxhelmrelease_container(manifest, container, replace):
         image = values['image']
         imageKey = 'image'
 
-        if isinstance(image, collections.Mapping) and 'repository' in image and 'tag' in image:
+        if isinstance(image, collections.abc.Mapping) and 'repository' in image and 'tag' in image:
             values = image
             imageKey = 'repository'
 
